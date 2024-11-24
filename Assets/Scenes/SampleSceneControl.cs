@@ -1,6 +1,6 @@
 using System;
+using System.Collections;
 using System.IO;
-using System.Threading;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -10,9 +10,19 @@ public class SampleSceneControl : MonoBehaviour
 
     public float startTime = 72.308f;
 
+    public bool streamAudio = true;
+
+    public int clickCount;
+
     public void StopAudio()
     {
         audioSource.Stop();
+    }
+
+    public void IncreaseClickCount()
+    {
+        clickCount++;
+        Debug.Log($"Click count: {clickCount}");
     }
 
     public void StartAudioOk()
@@ -25,50 +35,53 @@ public class SampleSceneControl : MonoBehaviour
     public void StartAudioBroken()
     {
         // This AudioClip starts playback slightly off, approx. 1 second off.
-        // There is an audible difference to the clip that works correctly..
+        // There is an audible difference to the clip that works correctly.
         StartAudio("Scenes/audio-broken.mp3");
     }
 
     private void StartAudio(string relativePath)
     {
+        using var d1 = new DisposableStopwatch("StartAudio took <ms> ms");
+
         string fullPath = Path.Combine(Application.dataPath, relativePath);
+        StartCoroutine(LoadAudioCoroutine(fullPath, streamAudio, audioClip =>
+        {
+            using var d2 = new DisposableStopwatch("StartAudio callback took <ms> ms");
 
-        AudioClip audioClip = LoadAudioClipImmediately(fullPath, true);
-        audioSource.clip = audioClip;
+            audioSource.clip = audioClip;
 
-        audioSource.time = startTime;
+            audioSource.time = startTime;
 
-        Debug.Log($"Set time to {startTime} s");
-        Debug.Log($"AudioSource.time: {audioSource.time} s, length: {audioSource.clip.length} s");
-        Debug.Log($"AudioSource.timeSamples: {audioSource.timeSamples}, length in samples: {audioSource.clip.samples}, channels: {audioSource.clip.channels}");
+            Debug.Log($"Set time to {startTime} s");
+            Debug.Log($"AudioSource.time: {audioSource.time} s, length: {audioSource.clip.length} s");
+            Debug.Log($"AudioSource.timeSamples: {audioSource.timeSamples}, length in samples: {audioSource.clip.samples}, channels: {audioSource.clip.channels}");
 
-        audioSource.Play();
+            audioSource.Play();
+        }));
     }
 
-    private static AudioClip LoadAudioClipImmediately(string uri, bool streamAudio)
+    private IEnumerator LoadAudioCoroutine(string uri, bool streamAudio, Action<AudioClip> callback)
     {
-        Uri uriHandle = new Uri(uri);
-        using UnityWebRequest webRequest = CreateAudioClipRequest(uriHandle, streamAudio);
-        webRequest.SendWebRequest();
+        using var d1 = new DisposableStopwatch("LoadAudioCoroutine took <ms> ms");
 
-        while (!webRequest.isDone)
+        UnityWebRequest request = CreateAudioClipRequest(new Uri(uri), streamAudio);
+        Debug.Log("LoadAudioCoroutine After CreateAudioClipRequest");
+
+        using (var d2 = new DisposableStopwatch("LoadAudioCoroutine SendWebRequest took <ms> ms"))
         {
-            Debug.LogWarning("Waiting for AudioClip to load via Thread.Sleep");
-            Thread.Sleep(10);
+            yield return request.SendWebRequest();
+            // Debug.Log("LoadAudioCoroutine After SendWebRequest");
         }
 
-        if (webRequest.result
-            is UnityWebRequest.Result.ConnectionError
-            or UnityWebRequest.Result.ProtocolError)
+        AudioClip clip;
+        using (var d3 = new DisposableStopwatch("LoadAudioCoroutine DownloadHandlerAudioClip.GetContent took <ms> ms"))
         {
-            Debug.LogError("Error Loading Audio: " + uri);
-            Debug.LogError(webRequest.error);
+            clip = DownloadHandlerAudioClip.GetContent(request);
+            // Debug.Log("LoadAudioCoroutine After DownloadHandlerAudioClip.GetContent");
         }
 
-        AudioClip audioClip = (webRequest.downloadHandler as DownloadHandlerAudioClip)?.audioClip;
-        string fileName = Path.GetFileName(uriHandle.LocalPath);
-        audioClip.name = $"Audio file '{fileName}'";
-        return audioClip;
+        Debug.Log($"Downloaded AudioClip: {clip}");
+        callback(clip);
     }
 
     private static UnityWebRequest CreateAudioClipRequest(Uri uriHandle, bool streamAudio)
